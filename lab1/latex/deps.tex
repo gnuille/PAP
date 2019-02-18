@@ -1,0 +1,41 @@
+\section{Dependency analysis}
+With the objective of exploding all the potential parallelism of the program and avoiding race conditions, we must perform an analysis of the code.
+
+\justify
+The first relevant part we encounter is this loop, that initialise the vector representing the sieve. 
+\begin{lstlisting}[caption={Initial loop}, captionpos=b]
+for (i = 0; i <= lastNumber; i++) isPrime[i] = 1;
+\end{lstlisting}
+We can see that this loop has no inter iterations dependencies, therefore it can be easily parallelized.
+\justify
+Then we find the main loop.
+\begin{lstlisting}[caption={Main loop}, captionpos=b]
+ for (i = 0; i <= lastNumber; i++) isPrime[i] = 1;
+
+  // 2. Starting from i=2, the first unmarked 
+  number on the list ...
+  for (i = 2; i <= sqrt_lN; i++)
+  //for (int i = 2; i*i <= lastNumber; i++)
+    // ... find the smallest number greater or equal 
+    than i that is unmarked 
+    if (isPrime[i])
+      // 3. Mark all multiples of i between i^2 and lastNumber
+      for (int j = i*i; j <= lastNumber; j += i) 
+        isPrime[j] = 0;
+\end{lstlisting}
+
+\justify
+This loops iterates through the interval $[2,\sqrt{n}]$ and if the number is prime, we mark its multiples as prime.
+\justify
+If we think of a parallel approach for the outer loop, it can work, but it doesn't have much sense as the nature of the loop is sequential, for exmaple: first we check the number 2 and discard all multiples of 2, then we check number 3 and discard its multiples, we check number 4 and we see its discarded so we don't do extra work. If we run this loop in parallel we may be doing extra work as the loop would be running extra iterations before getting discarded, in the previous examples, we spawn our threads and do the iterations 2, 3 and 4 at the same time, so the number 4 would be discarding the same multiples as the 2 does.
+
+\justify
+Instead we can try for a finer grain parallelization, precisely, the inner-most loop which is easier to work with and its more simpler, it doesn't have any possible race condition.
+\clearpage
+\justify
+Finally we find out the last loop, this loop has a very well known scheme, we are counting how many primes there are in the vector. Running this loop in parallel does have a problem as all threads adds to the same variable. This can be easily solved using a reduction.
+\begin{lstlisting}
+for(i = 2; i <= lastNumber; i++)
+    found+=isPrime[i];
+\end{lstlisting}
+

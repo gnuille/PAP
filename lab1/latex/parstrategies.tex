@@ -1,4 +1,13 @@
 \section{Parallelization strategies}
+In this section we are going to implement two diferent parallel versions of the \sieve algorithm.
+
 \subsection{Worksharing constructs model}
+Taking into account 
+
+\begin{lstlisting}
+#pragma omp paralllel for
+\end{lstlisting}
+
+Later on, we wil analyze the performance, and modify the pragma to try different granularities.
 
 \subsection{Task based model}

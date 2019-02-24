@@ -1,13 +1,64 @@
 \section{Parallelization strategies}
-In this section we are going to implement two diferent parallel versions of the \sieve algorithm.
+In this section we are going to look at two different implementations of the \sieve algorithm. 
 
 \subsection{Worksharing constructs model}
-Taking into account 
-
-\begin{lstlisting}
+Taking into account that in the analysis we found out no parallelization problem of the first loops, we will just have to add the following worksharing construct which tells to the \omp runtime to distribute the iterations of the loop in correlation the schedule defined.
+\begin{lstlisting}[caption={Base pragma for worksharing constructs}, captionpos=b]
 #pragma omp paralllel for
 \end{lstlisting}
 
-Later on, we wil analyze the performance, and modify the pragma to try different granularities.
+In the final loop we commented we needed a reduction. In this version the solution is simple, we tell the \omp runtime that we want to all threads to accumulate to a private variable install the shared copy and finally one main thread add up all copies with the operator we specify, in this case, the sum operator.
+
+\begin{lstlisting}[caption={Base pragma plus a reduction}, captionpos=b]
+  #pragma omp parallel for private(i) reduction(+:found) 
+  for (i = 2; i <= lastNumber; i++)
+        found += isPrime[i];
+\end{lstlisting}
+
+\justify
+Later on, we will analyse the performance, and modify the pragma to try different granularity's.
 
 \subsection{Task based model}
+In the task based model, we will be using \texttt{taskloop} constructs which creates tasks as iterations or groups of iterations as tasks, depending on the granularity.
+
+\justify
+For the first two loops, as seen in previous sections we don't need to add synchronisations, we just need to add the following pragma.
+
+\begin{lstlisting}[caption={Base pragma for task based model}, captionpos=b]
+  #pragma omp taskloop
+\end{lstlisting}
+\justify
+Finally, for the reduction its a bit tricky, as \omp has no support for taskloop reductions, we have to do it manually.  
+
+\justify
+First we declare parallel region that will involve all the code, then, a \texttt{\#pragma omp single} pragma is called which will make that just one thread executes the following code and distribute the work defined using tasks constructs, the main thread gets the number of threads and we make the main thread to declare a variable for each thread where they will be accumulating the value of found in the last loop.
+
+\begin{lstlisting}[caption={Main structure for task based model}, captionpos=b]
+#pragma omp parallel
+#pragma omp single
+{
+  int nt = omp_get_num_threads();
+  int *found_ac = (int *) malloc(nt*sizeof(int));
+
+  #pragma omp taskloop
+  for( i= 0; i < nt; i++ ){
+        found_ac[i] = 0;
+  }
+
+\end{lstlisting}
+
+Once the sieve is computed, all threads traverse some part of the vector \texttt{isPrime} and accumulate to its copy of found, and for the last, the main thread add up all the copies in to the \texttt{found} variable which is returned.
+
+\begin{lstlisting}[caption={Manual reduction implementation}, captionpos=b]
+  #pragma omp taskloop
+  for(i = 2; i <= lastNumber; i++)
+        found_ac[omp_get_thread_num()] += isPrime[i];
+
+  for(i = 0; i < nt; i++){
+        found += found_ac[i];
+  }
+\end{lstlisting}
+
+
+
+

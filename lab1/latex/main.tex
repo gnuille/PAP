@@ -14,6 +14,7 @@
 \usepackage{capt-of}
 \usepackage{amssymb}
 \usepackage{amsmath}
+\usepackage{pgfplots}
 \usepackage{csvsimple}
 \usepackage{definitions}
 \renewcommand{\lstlistingname}{Code}
@@ -23,6 +24,7 @@
     basicstyle=\footnotesize,% basic font setting
 }
 \graphicspath{{img/}} 
+\pgfplotsset{compat=1.15}
 \begin{document}
 \include{titlepage}
 \clearpage
@@ -41,6 +43,14 @@
 \include{parstrategies}
 \clearpage
 
+\include{performance}
+\clearpage
+
+\include{seqimproved}
+\clearpage
+
+\include{conclusions}
+\clearpage
 %%%%%%%%%%%%%img example%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 \iffalse
 \begin{figure}[h!]

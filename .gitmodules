@@ -1,0 +1,3 @@
+[submodule "miniomp"]
+	path = miniomp
+	url = https://github.com/teleportex/miniomp

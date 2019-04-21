@@ -1,0 +1,156 @@
+\section{Synchronisation pragmas implementation}
+In this section we will implement the \texttt{taskwait} and \texttt{taskgroup} synchronisation constructs. Mind that as we are not having nested tasks, the \texttt{\#pragma omp taskwait} and  \texttt{\#pragma omp taskgroup} do the same with the difference that taskgroup just waits for the once created in the region.
+
+\subsection{Taskwait implementation}
+My approach for implementing this synchronisation primitive is to add another counter to the circular buffer. The purpose of this counter is to monitor when a task is completely executed. With this counter we can track when all tasks have been completely executed, which means, we can continue from the taskwait. At this moment of implementation, you can see in the \hyperref[cbuffer]{Code \ref*{cbuffer}} that there is a counter, but this is in charge of the tasks in the buffer, but it does not take into account when they are finished of executing. 
+
+\begin{lstlisting}[caption=New circular buffer declaration, label=ncbuffer]
+typedef struct {
+    int max_elements;
+    int count;
+    int finished_count;
+    int head;
+    int tail;
+    pthread_mutex_t lock_queue;
+    pthread_mutex_t lock_operations;
+    miniomp_task_t **queue;
+} miniomp_taskqueue_t;
+\end{lstlisting}
+\par ~\\
+We will increment this counter in the \texttt{enqueue} function, and we will atomically decrement it just after executing a task, in the \hyperref[consumer]{Code \ref*{consumer}} after the \texttt{t->fn(t->data);} statement.
+
+\par ~\\
+In this mechanism proposed all threads try to update atomically a variable each time they execute a task, this, may lead to a high overhead for implementing something that is not urgent to have. With the objective of avoiding such overhead, all threads have a local variable that is updated each time they finish a task, and then, if they find the buffer empty, they try to atomically update the variable. 
+
+\begin{lstlisting}[caption=Consumer with tracking of executed tasks, label=nconsumer]
+if( !is_empty(miniomp_taskqueue) ){
+    lock(miniomp_taskqueue);
+    if( !is_empty(miniomp_taskqueue) ){
+        miniomp_task_t *t = first(miniomp_taskqueue);
+        dequeue(miniomp_taskqueue);
+        unlock(miniomp_taskqueue);
+        t->fn(t->data);
+        //update local copy
+        executed++;
+    }else{
+        unlock(miniomp_taskqueue);
+    }
+}else{
+    if(executed > 0){
+        __sync_fetch_and_sub(&miniomp_taskqueue->finished_count,
+                             executed);
+        executed = 0;
+    }
+}
+\end{lstlisting}
+\par ~\\
+Once we have our information properly updated, we can implement the taskwait construct. As the goal for this function is empty the task buffer, first of all we will do a consumer loop to help out our threads to empty the buffer, then, wait to the \texttt{finished\_count} variable value to be 0.
+
+\begin{lstlisting}
+void
+GOMP_taskwait (void)
+{
+        int cont=0;
+        while(!is_empty(miniomp_taskqueue)){
+                lock(miniomp_taskqueue);
+                if(!is_empty(miniomp_taskqueue)){
+                        miniomp_task_t *t = first(miniomp_taskqueue);
+                        dequeue(miniomp_taskqueue);
+                        unlock(miniomp_taskqueue);
+                        t->fn(t->data);
+                        cont++;
+                }else{
+                        unlock(miniomp_taskqueue);
+                }
+
+        }
+        __sync_fetch_and_sub(&miniomp_taskqueue->finished_count,
+                            cont);
+        while(1){
+                mb();
+                if(!miniomp_taskqueue->finished_count){
+                        return;
+                }
+        }
+}
+
+\end{lstlisting}
+
+\par ~\\
+The implementation is pretty straight forward, the consumer part is the same as the \texttt{worker} function with the difference that it's not an endless loop. The update of the \texttt{finished\_count} variable is done atomically. Finally, the wait has a memory barrier for ensuring the writes to count are propagated so we don't end in an infinite loop.
+
+\subsection{Taskgroup implementation}
+The taskgroup implementation follows the same scheme as the taskwait, with the difference we are waiting tasks inside the taskgroup to end. For implementing this, we added to variables, a counter, that works similar to the \texttt{finished\_count} but just with tasks inside the taskgroup, the other variable, is a state variable, that tells us if we are inside a taskgroup or not.
+
+\begin{lstlisting}[caption=Control variables and taskgroup start,label=tgstart]
+int in_taskgroup;
+int taskgroup_counter;
+
+GOMP_taskgroup_start (void)
+{
+    in_taskgroup=1;
+    taskgroup_counter=0;
+}
+\end{lstlisting}
+\par ~\\ 
+Another thing is needed, we need a mechanism for identify tasks that are inside a taskgroup, with this purpose I added a parameter to the task identifier that indicates if the task has been created within a taskgroup.
+\begin{lstlisting}[caption=Task structure definition,label=caption]
+typedef struct {
+    void (*fn)(void *);
+    void (*data);
+    int in_taskgroup;
+} miniomp_task_t;
+\end{lstlisting}
+\par ~\\
+Before inserting tasks we check if we are in a taskgroup, if so, then we increment the counter and mark the task as it is \texttt{in\_taskgroup}.
+\begin{lstlisting}[caption=Taskgroup aware task producer,label=tgproducer]
+if(in_taskgroup){
+    task->in_taskgroup = 1;
+    __sync_fetch_and_add(&taskgroup_counter,1);
+}
+\end{lstlisting}
+\par ~\\
+Then the task consumers (in the \texttt{worker} function and in the \texttt{taskwait}) have to check if the task executed is in a taskgroup, if so, decrement the counter.
+\begin{lstlisting}[caption=Taskgroup aware task consumer,label=tgconsumer]
+if(t->in_taskgroup){
+    __sync_fetch_and_sub(&taskgroup_counter,1);
+}
+\end{lstlisting}
+
+\par ~\\
+Finally once we are sure the information of the tasks executed inside the taskgroup is updated properlly we can proceed implementing the \texttt{GOMP\_taskgroup\_end} function. A same approach as the \texttt{taskwait} is choosen, first we consume all tasks, but now untill the tasks in the taskgroup are consumed, then we update the information of the executed tasks and finally we check another time all tasks inside the taskgroup have been executed.
+
+\begin{lstlisting}[caption=Taskgroup end implementation,label=tgend]
+void
+GOMP_taskgroup_end (void)
+{
+    int cont = 0;
+    while(taskgroup_counter > 0){
+        lock(miniomp_taskqueue);
+        if(!is_empty(miniomp_taskqueue)){
+            miniomp_task_t *t = first(miniomp_taskqueue);
+            dequeue(miniomp_taskqueue);
+            unlock(miniomp_taskqueue);
+            t->fn(t->data);
+            cont++;
+            if(t->in_taskgroup){
+                __sync_fetch_and_sub(&taskgroup_counter,1);
+            }
+        }else{
+            unlock(miniomp_taskqueue);
+        }
+        mb();
+}
+        __sync_fetch_and_sub(&miniomp_taskqueue->finished_count,
+                             cont);
+        while(1){
+                mb();
+                if(!taskgroup_counter){
+                        in_taskgroup=0;
+                        return; 
+                }
+        }
+}
+\end{lstlisting}
+
+

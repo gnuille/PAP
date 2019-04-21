@@ -1,15 +1,27 @@
 \documentclass{article}
 \usepackage{listings}
 \usepackage{ragged2e}
+\usepackage{xcolor}
+\usepackage{hyperref}
 \lstset{
 	language=C,
 	backgroundcolor=\color{black!5},
 	basicstyle=\footnotesize,
+	captionpos=b,
 }
-
+\renewcommand{\lstlistingname}{Code}
 \begin{document}
 
-
 \include{titlepage}
+\clearpage
+\tableofcontents
+\include{introduction}
+\clearpage
+\include{parallel}
+\clearpage
+\include{task}
+\clearpage
+\include{sync}
+\clearpage
 
 \end{document}

@@ -1,0 +1,96 @@
+\section{The task pragma}
+The task pragma is preprocessed similarly compared to the parallel pragma, but with more parameters. What I mean is that the body of the task is encapsulated into a function and the pointer is passed, the sane with the data, we are also given a copy function if the data needs to be copied in a different way from \texttt{memcpy}, and the size and aligment of the data. We are also given parameters such as the if\_clause and task depends and extra flags, we will not be implementing those for simplicity. The header of the function is.
+
+\begin{lstlisting}[caption=Header for GOMP\_task function, label=GOMPtask]
+GOMP_task (void (*fn) (void *), void *data,
+           void (*cpyfn) (void *, void *),
+           long arg_size, long arg_align,
+           bool if_clause, unsigned flags,
+           void **depend, int priority);
+\end{lstlisting}
+
+\par ~\\
+The idea is that the master thread, the one that executes the parallel region, will be encountering different \texttt{GOMP\_task} function calls, then it encapsulates the work, and the other threads retrieve the different encapsulated tasks and execute them. We are encouraged to implement this producer/consumer scheme using a circular buffer. 
+
+\subsection{Thread safe circular buffer}
+
+For implementing a thread safe circular buffer, we will need, the typical circular buffer variables (head, tail ...) and also two locks. The first lock will be in charge of two or more threads performing insertions or extractions of the circular buffer to succeed, the other lock is in charge to let threads perform atomic operations to the buffer, I mean for example, read the head of the buffer and extract, without any other thread extracts before us. The first lock is called \texttt{lock\_queue} and the second \texttt{lock\_operations}. The data needed by the circular buffer to work is the following.
+
+\begin{lstlisting}[caption=Circular buffer declaration, label=cbuffer]
+typedef struct {
+    int max_elements;
+    int count;
+    int head;
+    int tail;
+    pthread_mutex_t lock_queue;
+    pthread_mutex_t lock_operations;
+    miniomp_task_t **queue;
+} miniomp_taskqueue_t;
+
+\end{lstlisting}
+
+\par ~\\
+Then I implemented a set of functions for working with the buffer,mind that the complete implementation of them are located in the \texttt{task.c} file.
+The \texttt{lock} and \texttt{unlock} functions just lock the operations on the buffer and unlock them suing the \texttt{lock\_operations} lock. The enqueue and dequeue functions are thread safe in case of two or more threads perform insertions/extractions at the same time using the \texttt{lock\_queue} lock.
+
+\begin{lstlisting}[caption=Circular buffer functions, label=cbufferfunctions]
+bool is_empty(miniomp_taskqueue_t *task_queue);
+bool is_full(miniomp_taskqueue_t *task_queue) ;
+bool enqueue(miniomp_taskqueue_t *task_queue, 
+             miniomp_task_t *task_descriptor);
+bool dequeue(miniomp_taskqueue_t *task_queue);
+void lock(miniomp_taskqueue_t *task_queue);
+void unlock(miniomp_taskqueue_t *task_queue);
+miniomp_task_t *first(miniomp_taskqueue_t *task_queue);
+void init_task_queue(int max_elements);
+\end{lstlisting}
+
+\subsection{The task implementation}
+Once we have the circular buffer implemented, we have to use it to implement the procedure described at the beginning of the section.
+
+\par ~\\
+First of all we have to initialize our buffer in the \texttt{init\_miniomp} function.
+\begin{lstlisting}[caption=Buffer initialisation, label=bufferinit]
+    init_task_queue(MAXELEMENTS_TQ);
+\end{lstlisting}
+
+\par ~\\
+Then, in the GOMP\_task function, we have to: copy the data with the appropriate function, encapsulate the function, try to inert it into de buffer, if the buffer is full execute it.
+
+\begin{lstlisting}[caption=\texttt{GOMP\_task} implementation, label=producer]
+GOMP_task (void (*fn) (void *), void *data,
+           void (*cpyfn) (void *, void *),
+           long arg_size, long arg_align,
+           bool if_clause, unsigned flags,
+           void **depend, int priority)
+{
+    copy_data(); //simplifaction
+    
+    if(!enqueue(miniomp_taskqueue, task)){
+        //the buffer is full
+        task->fn(task->data);
+    }
+}
+\end{lstlisting}
+\par ~\\
+This is the producer part of the mechanism, the consumer part is in the worker function: \hyperref[workernotask]{Code \*ref{workernotask}}. In the loop we will add a mechanism to extract tasks and execute them.
+In this function we implement a mechanism to reduce the load to the \texttt{lock\_operation} buffer, so in the case the buffer is empty we don't try to lock it, note that we check it again once we acquire the lock, because in the first check nothing ensure us that there is no extraction operation and could lead to an extraction with and empty buffer.
+
+\par ~\\
+The body of the \texttt{while(1)} in the \texttt{worker} function is.
+
+\begin{lstlisting}[caption=Body of the consumer, label=consumer]
+if( !is_empty(miniomp_taskqueue) ){
+    lock(miniomp_taskqueue);
+    if( !is_empty(miniomp_taskqueue) ){
+        miniomp_task_t *t = first(miniomp_taskqueue);
+        dequeue(miniomp_taskqueue);
+        //operation complete, unlock
+        unlock(miniomp_taskqueue);
+    }else{
+        unlock(miniomp_taskqueue);
+    }
+}
+\end{lstlisting}
+
+This implementation works, but there is a problem, parallel construct has an implicit \texttt{taskwait} in the end. Right now, once our master thread executes the parallel region and creates all tasks, it returns from the \texttt{GOMP\_parallel} function. In the next section I will implement the synchronisation mechanism and add it to the end of the parallel region.

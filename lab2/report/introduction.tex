@@ -1,0 +1,12 @@
+\section{Introduction}
+\par
+In this laboratory assignment we were given a environment to implement a simplified \texttt{OpenMP} runtime using the POSIX Pthreads standard library. We were proposed two itineraries, one that is focused on implementing the \textbf{worksharing model}, and a second one that implements the \textbf{tasking model}.
+
+\par ~\\
+Based on the experience with the previous laboratory assignment, where we compared both models, I had more confidence in the tasking model as a form of expressing parallelism. Also in the \textbf{Parallelism} course I had to work with the tasking model and I had struggle understanding how it worked. 
+
+\par ~\\
+Consequently, my itinerary choice was the \textbf{tasking model} to have the oportunity of understand better the internals of the tasking model, where the overhead of creating tasks comes from, and from where comes the magic of adding to the code \texttt{\#pragma omp task} and getting the statement under the pragma ran in parallel. All this questions will be answered during the report.
+
+\par ~\\
+This document is a walk through my \textbf{tasking model} implementation. Also it will contain some performance evaluation and comparison to OpenMP runtime.

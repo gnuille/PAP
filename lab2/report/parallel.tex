@@ -1,0 +1,125 @@
+
+\section{The parallel pragma}
+In this section we are going to review the parallel pragma implementation. When we add a \texttt{\#pragma omp parallel} construct, if we look into the assembler generated, we find that the pragma is substituted with \texttt{GOMP\_parallel} call. In the file \texttt{parallel.c} we find it's header.
+
+\begin{lstlisting}[caption=Header for GOMP\_parallel function, label=GOMPparallel]
+void GOMP_parallel (void (*fn) (void *), 
+                    void *data, 
+                    unsigned num_threads, 
+                    unsigned int flags);
+\end{lstlisting}
+
+\par ~\\
+What the preprocessor does with the pragma is, encapsulates the statement involving the parallel construct in a function, and passes that function to the \texttt{GOMP\_parallel} function, with the data needed, also passes the number of threads that will be running the parallel section, also some flags that for simplicity we will be ignoring.
+
+\par ~\\
+As we are programming the tasking model, another simplification we will take is that by default, all \texttt{parallel} constructs are \texttt{single} by default, that means, that only the master thread will execute them. 
+
+\par ~\\
+For now on what the function have to do is, modify the number of threads executing the parallel region if it's necessary, that includes creating or destroying threads, for now, the threads will just be executing a \texttt{while(1)} as we haven't implemented yet tasking model. Then, execute the function passed by the preprocessor, and finally, if we modified the number of threads, reset it to the original value.
+
+\subsection{Handling pthreads}
+For the sake of avoiding the overhead of requesting memory the the OS, in the initialisation of the library, we ask for all the memory needed, using the \texttt{MAX\_THREADS} constant, as it's not a great quantity of memory, it will not be a big unneeded memory overhead. For pthread memory needed we understand.
+
+\begin{itemize}
+    \item pthread\_t memory for the pthread library, one per thread.
+    \item thread\_data structure with data from each thread, one per thread.
+    \item pthread\_key\_t a specific key for establishing a relation between the thread\_data of each thread and the thread.
+\end{itemize}
+\par ~\\
+The initialisation of the thread memory is as it follows:
+\begin{lstlisting}[caption=Initialisation of pthreads memory, label=PthreadInit]
+    //allocate needed memory
+    miniomp_threads = malloc(sizeof(pthread_t)*MAX_THREADS);
+    miniomp_thread_data = malloc(sizeof(thread_data)*MAX_THREADS);
+    //create and init specific key for thread data
+    pthread_key_create(&miniomp_specifickey,
+                        destroy_specifickey);
+    pthread_setspecific(miniomp_specifickey,
+                        &miniomp_thread_data[0]);
+    //init master thread specific data
+    miniomp_thread_data[0].tid = 0;
+\end{lstlisting}
+
+\par ~\\
+The next question I asked myself, is, \textit{When will I be creating and destroying threads?}. I though that I cannot follow the same approach as memory, beacuse if I create more threads than asked, they will consume CPU unless I implement a mechanism for blocking them. So for a simpler approach I decided that in the initialisation of the library create \texttt{miniomp\_icv.nthreads\_var} threads and then if the function \texttt{omp\_set\_num\_threads(int n)} is called or a parallel region with a different number of threads is issued, we will dynamically create or destroy threads. Mind that this mechanism leads to an overhead when changing the number of threads. 
+\par ~\\
+I implemented this mechanism described in the \texttt{omp\_set\_num\_threads} function.
+
+\begin{lstlisting}[caption=Dynamically changing the number of threads, label=ompsetnumthreads]
+void omp_set_num_threads (int n) {
+    n = (n > 0 ? n : 1);
+    int i;
+    //we need more threads than we have? then create
+    if( n > miniomp_icv.nthreads_var){
+        for(i = miniomp_icv.nthreads_var; i<n; i++)
+        {
+            pthread_create(&miniomp_threads[i],
+                           NULL,
+                           &worker, //the while(1)
+                           (void *)(long) i);
+        }
+    }
+    //is the number of threads lesser? then destroy
+    else if(n < miniomp_icv.nthreads_var){
+        for(i=miniomp_icv.nthreads_var; i>=n; i--)
+        {
+            pthread_cancel(miniomp_threads[i]);
+        }
+    }
+    //update the number of threads
+    miniomp_icv.nthreads_var=n;
+}
+\end{lstlisting}
+
+\par ~\\
+The function will also be called in the parallel region if the number of threads is modified.
+
+\subsection{The parallel region implementation}
+Once we have all the pthread management clear, the parallel region implementation is straight forward. We have to, modify the number of threads if it changes, execute the function, and then set the number of threads back to the original value if we changed it. 
+
+\begin{lstlisting}[caption=Parallel region with no task support, label=parallelnotask]
+void GOMP_parallel (void (*fn) (void *), void *data, 
+                    unsigned num_threads,          
+                    unsigned int flags)             
+{
+    int orig=0;
+    if(num_threads){  //number of threads modified?
+        orig=miniomp_icv.nthreads_var;
+        //change number of threads
+        omp_set_num_threads(num_threads);  
+    }
+    fn(data); //master thread execute the region
+    
+    //before returning set the num threads
+    if(num_threads) omp_set_num_threads(orig);
+}
+\end{lstlisting}
+\par ~\\
+In this section we are also told to implement the \texttt{omp\_get\_thread\_num()} function, this is easy to implement using the thread specific key that we initialize on the initialization of the library (\hyperref[PthreadInit]{Code \ref*{PthreadInit}})
+
+\par ~\\
+From the \hyperref[ompsetnumthreads]{Code \ref*{ompsetnumthreads}} we see that we initialize the threads with the \texttt{worker} function passing as argument it's id. When threads are created, they set its specific data to their corresponding position of the \texttt{miniomp\_thread\_data} array.
+
+\begin{lstlisting}[caption=\texttt{worker} function with no task support, label=workernotask]
+void *worker(void *tid)
+{
+    miniomp_thread_data[(int) (long) tid].tid = (int) (long) tid;
+    pthread_setspecific(miniomp_specifickey,
+                        &miniomp_thread_data[(int) (long) tid]);
+    while(1); 
+}
+
+\end{lstlisting}
+
+\par ~\\
+With that set we are ready to implement the \texttt{omp\_get\_thread\_num()} function, that it just have to retrieve its specific data and return the \texttt{tid} parameter of the structure.
+
+\begin{lstlisting}[caption=\texttt{omp\_get\_thread\_num()} function implementation, label=ompgetthreadnum]
+int omp_get_thread_num(void)
+{
+    thread_data *td;
+    td=(thread_data*) pthread_getspecific(miniomp_specifickey);
+    return td->tid; 
+}
+\end{lstlisting}

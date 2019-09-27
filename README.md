@@ -5,3 +5,5 @@ In this laboratory assignement I analyzed the two OpenMP paradigms, task based m
 ## Lab2 MiniOMP
 In this laboratory assignement I implemented a minimal version of OpenMP implementing task based model.
 
+For the implementation view: https://github.com/teleportex/miniomp
+
